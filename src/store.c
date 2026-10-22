@@ -1,0 +1,207 @@
+#include "store.h"
+
+#include <string.h>
+
+#include "platform.h"
+
+#define STATE_MAGIC 0x45524f46u /* "FORE" */
+#define PG_TALLY 2              /* + PIN_REF / PUK_REF */
+#define TALLY_MAX (FLASH_PAGE_SIZE / 2)
+
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;
+    uint32_t crc;
+    uint32_t len;
+} state_hdr;
+
+static const struct {
+    uint32_t tag;
+    uint8_t page, npages;
+} objects[] = {
+    {0x5fc105, 4, 2},  /* certificate, 9A PIV authentication */
+    {0x5fc10a, 6, 2},  /* certificate, 9C digital signature */
+    {0x5fc10b, 8, 2},  /* certificate, 9D key management */
+    {0x5fc101, 10, 2}, /* certificate, 9E card authentication */
+    {0x5fc102, 12, 1}, /* CHUID */
+    {0x5fc107, 13, 1}, /* CCC */
+};
+
+piv_state g_state;
+static int cur_page = -1;
+static uint32_t cur_seq;
+
+static uint32_t crc32(const void *data, size_t len)
+{
+    const uint8_t *p = data;
+    uint32_t crc = 0xffffffff;
+    while (len--) {
+        crc ^= *p++;
+        for (int i = 0; i < 8; i++)
+            crc = (crc >> 1) ^ (0xedb88320 & (0u - (crc & 1)));
+    }
+    return ~crc;
+}
+
+static int state_valid(unsigned page, uint32_t *seq)
+{
+    const state_hdr *h = (const state_hdr *)flash_page(page);
+    if (h->magic != STATE_MAGIC || h->len != sizeof(piv_state) ||
+        h->crc != crc32(h + 1, sizeof(piv_state)))
+        return 0;
+    *seq = h->seq;
+    return 1;
+}
+
+static void state_defaults(piv_state *s)
+{
+    static const uint8_t pin[8] = {'1', '2', '3', '4', '5', '6', 0xff, 0xff};
+    static const uint8_t puk[8] = {'1', '2', '3', '4', '5', '6', '7', '8'};
+
+    memset(s, 0, sizeof(*s));
+    memcpy(s->pin, pin, 8);
+    memcpy(s->puk, puk, 8);
+    for (int i = 0; i < 24; i++)
+        s->mgmt[i] = (uint8_t)(i % 8 + 1); /* 0102030405060708 x 3 */
+    s->max_tries[PIN_REF] = 3;
+    s->max_tries[PUK_REF] = 3;
+}
+
+int store_save(void)
+{
+    unsigned page = cur_page == 0 ? 1 : 0;
+    state_hdr h = {STATE_MAGIC, cur_seq + 1, crc32(&g_state, sizeof(g_state)), sizeof(g_state)};
+
+    /* The magic goes in last so a torn write never looks valid. */
+    if (flash_erase(page) ||
+        flash_program(page, sizeof(h), &g_state, sizeof(g_state)) ||
+        flash_program(page, 4, &h.seq, sizeof(h) - 4) ||
+        flash_program(page, 0, &h.magic, 4))
+        return -1;
+    cur_page = (int)page;
+    cur_seq = h.seq;
+    return 0;
+}
+
+void store_format(void)
+{
+    for (unsigned p = 0; p < STORE_PAGES; p++)
+        flash_erase(p);
+    cur_page = -1;
+    cur_seq = 0;
+    state_defaults(&g_state);
+    store_save();
+}
+
+static unsigned tally_count(int ref)
+{
+    const uint16_t *p = (const uint16_t *)flash_page(PG_TALLY + ref);
+    unsigned n = 0;
+    while (n < TALLY_MAX && p[n] == 0)
+        n++;
+    return n;
+}
+
+/* A tally page must be zeros followed by erased halfwords. */
+static int tally_valid(int ref)
+{
+    const uint16_t *p = (const uint16_t *)flash_page(PG_TALLY + ref);
+    for (unsigned i = tally_count(ref); i < TALLY_MAX; i++)
+        if (p[i] != 0xffff)
+            return 0;
+    return 1;
+}
+
+void store_init(void)
+{
+    uint32_t s0 = 0, s1 = 0;
+    int v0 = state_valid(0, &s0), v1 = state_valid(1, &s1);
+
+    if (!v0 && !v1) {
+        store_format();
+        return;
+    }
+    cur_page = (v0 && (!v1 || s0 > s1)) ? 0 : 1;
+    cur_seq = cur_page == 0 ? s0 : s1;
+    memcpy(&g_state, flash_page(cur_page) + sizeof(state_hdr), sizeof(g_state));
+
+    for (int ref = PIN_REF; ref <= PUK_REF; ref++) {
+        if (!tally_valid(ref)) {
+            /* Unreadable counter: fail closed by blocking the reference. */
+            static const uint16_t zero = 0;
+            flash_erase(PG_TALLY + ref);
+            for (unsigned i = 0; i < g_state.max_tries[ref]; i++)
+                flash_program(PG_TALLY + ref, 2 * i, &zero, 2);
+        }
+    }
+}
+
+int store_failures(int ref)
+{
+    return (int)tally_count(ref);
+}
+
+void store_add_failure(int ref)
+{
+    static const uint16_t zero = 0;
+    unsigned n = tally_count(ref);
+    if (n < TALLY_MAX)
+        flash_program(PG_TALLY + ref, 2 * n, &zero, 2);
+}
+
+void store_clear_failures(int ref)
+{
+    if (tally_count(ref))
+        flash_erase(PG_TALLY + ref);
+}
+
+int store_object_index(uint32_t tag)
+{
+    for (unsigned i = 0; i < sizeof(objects) / sizeof(objects[0]); i++)
+        if (objects[i].tag == tag)
+            return (int)i;
+    return -1;
+}
+
+static size_t object_capacity(int idx)
+{
+    return objects[idx].npages * FLASH_PAGE_SIZE - 4;
+}
+
+const uint8_t *store_object(int idx, size_t *len)
+{
+    const uint8_t *p = flash_page(objects[idx].page);
+    unsigned l = p[0] | p[1] << 8, nl = p[2] | p[3] << 8;
+
+    if ((l ^ nl) != 0xffff || l > object_capacity(idx))
+        return NULL;
+    *len = l;
+    return p + 4;
+}
+
+int store_put_object(int idx, const uint8_t *data, size_t len)
+{
+    unsigned page = objects[idx].page;
+    size_t even = len & ~(size_t)1;
+    uint8_t hdr[4];
+
+    if (len > object_capacity(idx))
+        return -1;
+    for (unsigned i = 0; i < objects[idx].npages; i++)
+        if (flash_erase(page + i))
+            return -1;
+    if (len == 0)
+        return 0;
+    if (flash_program(page, 4, data, even))
+        return -1;
+    if (len & 1) {
+        uint8_t last[2] = {data[len - 1], 0xff};
+        if (flash_program(page, 4 + (unsigned)even, last, 2))
+            return -1;
+    }
+    hdr[0] = (uint8_t)len;
+    hdr[1] = (uint8_t)(len >> 8);
+    hdr[2] = (uint8_t)~len;
+    hdr[3] = (uint8_t)(~len >> 8);
+    return flash_program(page, 0, hdr, 4);
+}
