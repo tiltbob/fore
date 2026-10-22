@@ -29,11 +29,12 @@
 #define irq_on() __asm__ volatile("cpsie i" ::: "memory")
 #endif
 
+/* RSA SecurID 800's ID: listed in every libccid since 2006, never special-cased. */
 #ifndef USB_VID
-#define USB_VID 0x1209 /* pid.codes */
+#define USB_VID 0x15e1
 #endif
 #ifndef USB_PID
-#define USB_PID 0x0001 /* pid.codes test PID: fine for a private device */
+#define USB_PID 0x2007
 #endif
 
 /* Register offsets */

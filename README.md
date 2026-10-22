@@ -59,12 +59,15 @@ Needs `arm-none-eabi-gcc` with newlib (`gcc-arm-none-eabi` and
 
 ```sh
 make                                  # build/fore.elf, fore.bin, fore.hex
-make USB_VID=0x1234 USB_PID=0x5678    # use your own USB IDs
+make USB_VID=0x1234 USB_PID=0x5678    # use a different USB ID
 ```
 
-The default USB ID is `1209:0001`, a [pid.codes](https://pid.codes) test ID
-that is fine for a private device but must not be used for anything you
-distribute.
+The default USB ID is `15e1:2007`, borrowed from the RSA SecurID 800. libccid
+has listed it since 2006 and treats it as an ordinary CCID reader, so pcscd on
+any Linux distribution picks the dongle up without configuration. It is RSA's
+ID, though: fine for a device you keep, not for devices you give away. Every
+other ID stock libccid accepts belongs to some product too. With an ID of your
+own, run `sudo tools/ccid-add-id.py --vid … --pid …` on each Linux host.
 
 ### Novelty build: a key everyone knows
 
@@ -152,13 +155,11 @@ Install pcscd and OpenSC (`pcscd libccid opensc` on Debian/Ubuntu), plus
 `yubico-piv-tool` for loading keys and either `pkcs11-provider` or
 `libengine-pkcs11-openssl` for OpenSSL.
 
-On Linux, libccid only drives readers listed in its `Info.plist`, so register
-the device once (and again after libccid package upgrades):
+With the default USB ID nothing else is needed. libccid knows the ID and
+names the reader after the product it belongs to:
 
 ```sh
-sudo tools/ccid-add-id.py          # or --vid/--pid if you built with your own IDs
-sudo systemctl restart pcscd
-opensc-tool -l                     # shows "fore PIV (<serial>) 00 00"
+opensc-tool -l      # shows "RSA RSA SecurID (R) Authenticator (<serial>) 00 00"
 ```
 
 macOS and Windows ship CCID class drivers and should need nothing (untested).
@@ -166,10 +167,10 @@ macOS and Windows ship CCID class drivers and should need nothing (untested).
 ## Load a key
 
 `yubico-piv-tool` looks for a reader named "Yubikey" unless told otherwise, so
-pass `-r fore`.
+pass `-r SecurID`; any part of the reader name works.
 
 ```sh
-R="-r fore"
+R="-r SecurID"
 
 # Replace the defaults first. Keep the management key somewhere safe.
 MGM=$(openssl rand -hex 24)
@@ -314,8 +315,8 @@ make -C test e2e       # pcscd + OpenSC + yubico-piv-tool + OpenSSL, twice
 `make -C test e2e` additionally needs `pcscd libccid vsmartcard-vpcd opensc
 yubico-piv-tool pkcs11-provider libengine-pkcs11-openssl libusb-1.0-0-dev`, and
 starts its own pcscd (stop any running one). It runs the same scenario twice:
-once with the applet behind the vpcd virtual reader, and once with libccid
-talking to the firmware's own USB driver through a fake libusb
+once with the applet behind the vpcd virtual reader, and once with the stock,
+unmodified libccid talking to the firmware's own USB driver through a fake libusb
 (`test/fake_libusb.c`) LD_PRELOADed into pcscd. A third, short run checks the
 novelty build: the card signs as d = 4, and so does anyone else.
 
@@ -326,6 +327,6 @@ src/        portable code: PIV applet, CCID, flash storage, P-384, SHA-384, 3DES
 stm32/      STM32F103 start-up, clocks, USB driver, flash and RNG, linker script
 host/       platform shims and the vpcd virtual card for running on a PC
 test/       unit tests, USB peripheral model, fake libusb, end-to-end script
-tools/      ccid-add-id.py: register the USB ID with libccid on Linux
+tools/      ccid-add-id.py: register a non-default USB ID with libccid on Linux
             gen-preload.py: factory-default key and certificate (make novelty)
 ```

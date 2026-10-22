@@ -3,8 +3,8 @@
 # OpenSSL (pkcs11-provider and the libp11 engine).
 #
 #   ./e2e.sh vpcd   applet behind vsmartcard's virtual reader
-#   ./e2e.sh usb    full firmware USB path: libccid talks to stm32/usb.c through
-#                   a fake libusb (test/fake_libusb.c) and the peripheral model
+#   ./e2e.sh usb    full firmware USB path: the stock libccid talks to stm32/usb.c
+#                   through a fake libusb (test/fake_libusb.c) and the peripheral model
 #   ./e2e.sh novelty  vpcd with the factory-preloaded d = 4 key (make novelty)
 #
 # Starts its own pcscd, so no other pcscd may be running.
@@ -57,18 +57,15 @@ EOF
     READER="Virtual PCD 00 00"
     ;;
 usb)
-    # A private copy of libccid's bundle with our VID/PID registered, exactly
-    # as tools/ccid-add-id.py would do to the system one.
-    cp -r /usr/lib/pcsc/drivers/ifd-ccid.bundle "$WORK/drivers/"
-    python3 "$ROOT/tools/ccid-add-id.py" --plist "$WORK/drivers/ifd-ccid.bundle/Contents/Info.plist"
+    # The stock libccid bundle, unmodified: the default USB ID is on its list.
+    # The reader takes the name libccid gives that ID, as with hotplug.
     cat >"$WORK/readers/fore" <<EOF
-FRIENDLYNAME "fore"
-DEVICENAME   usb:1209/0001
-LIBPATH      $WORK/drivers/ifd-ccid.bundle/Contents/Linux/libccid.so
+FRIENDLYNAME "RSA RSA SecurID (R) Authenticator"
+DEVICENAME   usb:15e1/2007
+LIBPATH      /usr/lib/pcsc/drivers/ifd-ccid.bundle/Contents/Linux/libccid.so
 EOF
-    export PCSCLITE_HP_DROPDIR=$WORK/drivers
     FORE_FLASH=$WORK/flash.bin LD_PRELOAD=$BUILD/libfakeusb.so start_pcscd
-    READER="fore"
+    READER="SecurID"
     ;;
 *)
     fail "mode must be vpcd, usb or novelty"

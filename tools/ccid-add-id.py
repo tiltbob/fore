@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Add a USB VID/PID to libccid's Info.plist so pcscd on Linux uses the device.
 
-libccid only drives readers listed in its Info.plist. macOS and Windows have
-class drivers and need nothing. Run as root, then restart pcscd:
+libccid only drives readers listed in its Info.plist. The firmware's default ID
+already is, so this is only needed after building with USB_VID/USB_PID set to
+an ID that is not. macOS and Windows have class drivers and need nothing. Run
+as root, then restart pcscd:
 
-    sudo tools/ccid-add-id.py                  # 0x1209:0x0001 "fore PIV"
     sudo tools/ccid-add-id.py --vid 0x1234 --pid 0x5678
     sudo systemctl restart pcscd
 
@@ -33,8 +34,8 @@ def prepend(text, key, value):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--vid", default="0x1209")
-    ap.add_argument("--pid", default="0x0001")
+    ap.add_argument("--vid", required=True)
+    ap.add_argument("--pid", required=True)
     ap.add_argument("--name", default="fore PIV")
     ap.add_argument("--plist", default=DEFAULT_PLIST)
     args = ap.parse_args()

@@ -84,7 +84,7 @@ static unsigned sw(const uint8_t *r, int n)
 static void test_descriptors(const uint8_t *d, const uint8_t *c, int clen)
 {
     CHECK(d[0] == 18 && d[1] == 1 && d[4] == 0 && d[7] == 64, "device descriptor header");
-    CHECK((d[8] | d[9] << 8) == 0x1209 && (d[10] | d[11] << 8) == 0x0001, "VID/PID");
+    CHECK((d[8] | d[9] << 8) == 0x15e1 && (d[10] | d[11] << 8) == 0x2007, "VID/PID");
     CHECK(clen == (c[2] | c[3] << 8) && c[4] == 1, "config length/interfaces");
 
     int pos = 9, ifaces = 0, eps = 0, ccid_desc = 0;

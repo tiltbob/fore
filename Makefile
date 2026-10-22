@@ -15,8 +15,8 @@ OBJCOPY := $(CROSS)objcopy
 SIZE := $(CROSS)size
 
 BUILD := build
-USB_VID ?= 0x1209
-USB_PID ?= 0x0001
+USB_VID ?= 0x15e1
+USB_PID ?= 0x2007
 PRELOAD_KEY ?=
 PRELOAD_SLOT ?= 9a
 PRELOAD_CERT ?=
@@ -49,6 +49,12 @@ $(BUILD)/fore.hex: $(BUILD)/fore.elf
 	$(OBJCOPY) -O ihex $< $@
 
 -include $(OBJS:.o=.d)
+
+# Rebuild the USB descriptors when the USB ID changes.
+$(BUILD)/fw/stm32/usb.o: $(BUILD)/usb.id
+$(BUILD)/usb.id: FORCE
+	@mkdir -p $(BUILD)
+	@echo '$(USB_VID):$(USB_PID)' | cmp -s - $@ || echo '$(USB_VID):$(USB_PID)' > $@
 
 ifneq ($(PRELOAD_CERT),)
 ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)

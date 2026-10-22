@@ -21,6 +21,9 @@ all: $(BUILD)/test_crypto $(BUILD)/test_usb $(BUILD)/test_piv $(BUILD)/test_prel
 	$(BUILD)/test_preload_ca
 
 e2e: all $(BUILD)/vpcd_card $(BUILD)/vpcd_card_novelty $(BUILD)/libfakeusb.so
+	cp /usr/lib/pcsc/drivers/ifd-ccid.bundle/Contents/Info.plist $(BUILD)/Info.plist
+	python3 ../tools/ccid-add-id.py --vid 0x1209 --pid 0x0001 --plist $(BUILD)/Info.plist
+	grep -q '<string>fore PIV</string>' $(BUILD)/Info.plist
 	./e2e.sh vpcd
 	./e2e.sh usb
 	./e2e.sh novelty
