@@ -66,6 +66,30 @@ The default USB ID is `1209:0001`, a [pid.codes](https://pid.codes) test ID
 that is fine for a private device but must not be used for anything you
 distribute.
 
+### Novelty build: a key everyone knows
+
+```sh
+make novelty          # build/novelty/fore.{elf,bin,hex}
+```
+
+This build ships with the private key
+`0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004`
+(d = 4) in slot 9A. It also ships a self-signed certificate,
+"CN=fore insecure key (d = 0x4)", so OpenSC and OpenSSL see the key straight
+away. The device works like any other PIV token, PIN and all. Anyone can make
+the same signatures with a key file containing the number 4, and
+`build/novelty/preload-key.pem` is that file.
+
+The key and certificate are the factory defaults. They are written on the first
+boot of a blank (mass-erased) chip and come back after `yubico-piv-tool -a
+reset`. Importing your own key or certificate replaces them as usual.
+
+The general form is `make PRELOAD_KEY=<hex scalar> PRELOAD_SLOT=9a|9c|9d|9e
+BUILD=<dir>`, using a separate build directory per key. A preloaded key is
+compiled into the firmware image, so keep this for keys that are meant to be
+public. `tools/gen-preload.py` makes the certificate, which needs the `openssl`
+command-line tool.
+
 ## Flash the dongle
 
 You need a second SWD programmer (another ST-Link, a Raspberry Pi with
@@ -247,13 +271,16 @@ make -C test e2e       # pcscd + OpenSC + yubico-piv-tool + OpenSSL, twice
   of the STM32 USB peripheral (`test/usb_mock.c`): enumeration, descriptors,
   multi-packet control and bulk transfers, ZLPs, data toggles, halts, time
   extensions and bus resets.
+- `test_preload`: the novelty build's d = 4 key and certificate: present on a
+  blank device, replaceable, and restored by a reset.
 
 `make -C test e2e` additionally needs `pcscd libccid vsmartcard-vpcd opensc
 yubico-piv-tool pkcs11-provider libengine-pkcs11-openssl libusb-1.0-0-dev`, and
 starts its own pcscd (stop any running one). It runs the same scenario twice:
 once with the applet behind the vpcd virtual reader, and once with libccid
 talking to the firmware's own USB driver through a fake libusb
-(`test/fake_libusb.c`) LD_PRELOADed into pcscd.
+(`test/fake_libusb.c`) LD_PRELOADed into pcscd. A third, short run checks the
+novelty build: the card signs as d = 4, and so does anyone else.
 
 ## Layout
 
@@ -263,4 +290,5 @@ stm32/      STM32F103 start-up, clocks, USB driver, flash and RNG, linker script
 host/       platform shims and the vpcd virtual card for running on a PC
 test/       unit tests, USB peripheral model, fake libusb, end-to-end script
 tools/      ccid-add-id.py: register the USB ID with libccid on Linux
+            gen-preload.py: factory-default key and certificate (make novelty)
 ```

@@ -5,6 +5,7 @@
 #   ./e2e.sh vpcd   applet behind vsmartcard's virtual reader
 #   ./e2e.sh usb    full firmware USB path: libccid talks to stm32/usb.c through
 #                   a fake libusb (test/fake_libusb.c) and the peripheral model
+#   ./e2e.sh novelty  vpcd with the factory-preloaded d = 4 key (make novelty)
 #
 # Starts its own pcscd, so no other pcscd may be running.
 set -euo pipefail
@@ -38,8 +39,11 @@ start_pcscd() {
     PIDS+=($!)
 }
 
+CARD=$BUILD/vpcd_card
+[ "$MODE" = novelty ] && CARD=$BUILD/vpcd_card_novelty
+
 case $MODE in
-vpcd)
+vpcd | novelty)
     cat >"$WORK/readers/vpcd" <<EOF
 FRIENDLYNAME "Virtual PCD"
 DEVICENAME   /dev/null:0x8C7B
@@ -48,7 +52,7 @@ CHANNELID    0x8C7B
 EOF
     start_pcscd
     sleep 1
-    "$BUILD/vpcd_card" -s "$WORK/flash.bin" >"$WORK/card.log" 2>&1 &
+    "$CARD" -s "$WORK/flash.bin" >"$WORK/card.log" 2>&1 &
     PIDS+=($!)
     READER="Virtual PCD 00 00"
     ;;
@@ -67,7 +71,7 @@ EOF
     READER="fore"
     ;;
 *)
-    fail "mode must be vpcd or usb"
+    fail "mode must be vpcd, usb or novelty"
     ;;
 esac
 
@@ -83,6 +87,42 @@ grep -q "Personal Identity Verification Card" "$WORK/atr.txt" || fail "OpenSC di
 
 PIV=(yubico-piv-tool -r "$READER")
 cd "$WORK"
+cat >provider.cnf <<EOF
+openssl_conf = openssl_init
+[openssl_init]
+providers = provider_sect
+[provider_sect]
+default = default_sect
+pkcs11 = pkcs11_sect
+[default_sect]
+activate = 1
+[pkcs11_sect]
+module = /usr/lib/$MULTIARCH/ossl-modules/pkcs11.so
+pkcs11-module-path = $P11
+pkcs11-module-token-pin = 123456
+activate = 1
+EOF
+
+if [ "$MODE" = novelty ]; then
+    PRE=$BUILD/preload
+    step "factory key d = 4 in slot 9A"
+    "${PIV[@]}" -a status | tee status.txt
+    grep -q "CN=fore insecure key (d = 0x4)" status.txt || fail "preloaded certificate missing"
+    "${PIV[@]}" -P 123456 -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
+    echo "signed by a very secure token" >msg.txt
+    OPENSSL_CONF=$WORK/provider.cnf openssl dgst -sha384 -sign "pkcs11:object=PIV AUTH key;type=private" \
+        -out card.sig msg.txt
+    OPENSSL_CONF=$WORK/provider.cnf openssl pkey -pubin -in "pkcs11:object=PIV AUTH pubkey;type=public" \
+        -pubout -out card-pub.pem
+    openssl dgst -sha384 -verify card-pub.pem -signature card.sig msg.txt
+
+    step "and anyone can forge it"
+    openssl dgst -sha384 -sign "$PRE/preload-key.pem" -out forged.sig msg.txt
+    openssl dgst -sha384 -verify card-pub.pem -signature forged.sig msg.txt
+    echo
+    echo "e2e ($MODE): all tests passed"
+    exit 0
+fi
 
 step "status of a blank device"
 "${PIV[@]}" -a version -a status
@@ -122,21 +162,6 @@ pkcs11-tool --module "$P11" --login --pin 123456 --sign -m ECDSA-SHA384 --id 01 
 openssl dgst -sha384 -verify <(openssl x509 -in cert9a.pem -pubkey -noout) -signature p11.sig msg.txt
 
 step "OpenSSL via pkcs11-provider"
-cat >provider.cnf <<EOF
-openssl_conf = openssl_init
-[openssl_init]
-providers = provider_sect
-[provider_sect]
-default = default_sect
-pkcs11 = pkcs11_sect
-[default_sect]
-activate = 1
-[pkcs11_sect]
-module = /usr/lib/$MULTIARCH/ossl-modules/pkcs11.so
-pkcs11-module-path = $P11
-pkcs11-module-token-pin = 123456
-activate = 1
-EOF
 OPENSSL_CONF=$WORK/provider.cnf openssl dgst -sha384 -sign "pkcs11:object=PIV AUTH key;type=private" \
     -out prov9a.sig msg.txt
 openssl dgst -sha384 -verify <(openssl x509 -in cert9a.pem -pubkey -noout) -signature prov9a.sig msg.txt
@@ -189,7 +214,7 @@ if [ "$MODE" = vpcd ]; then
     step "state survives a restart"
     kill "${PIDS[-1]}"
     sleep 0.5
-    "$BUILD/vpcd_card" -s "$WORK/flash.bin" >>"$WORK/card.log" 2>&1 &
+    "$CARD" -s "$WORK/flash.bin" >>"$WORK/card.log" 2>&1 &
     PIDS+=($!)
     sleep 1
     "${PIV[@]}" -P 123456 -a verify-pin -a test-signature -s 9c -i cert9c.pem

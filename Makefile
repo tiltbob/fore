@@ -2,6 +2,9 @@
 #
 #   make                      build build/fore.elf, .bin and .hex
 #   make USB_VID=0x.. USB_PID=0x..
+#   make PRELOAD_KEY=<hex> [PRELOAD_SLOT=9a] BUILD=<dir>
+#                             factory-default key + self-signed certificate
+#   make novelty              the above with d = 4, in build/novelty
 #   make flash                program over SWD with st-flash
 #   make test                 run the host test suites
 
@@ -13,6 +16,8 @@ SIZE := $(CROSS)size
 BUILD := build
 USB_VID ?= 0x1209
 USB_PID ?= 0x0001
+PRELOAD_KEY ?=
+PRELOAD_SLOT ?= 9a
 
 SRCS := stm32/startup.c stm32/main.c stm32/usb.c \
         src/ccid.c src/piv.c src/store.c src/p384.c src/sha512.c src/des.c
@@ -42,6 +47,25 @@ $(BUILD)/fore.hex: $(BUILD)/fore.elf
 
 -include $(OBJS:.o=.d)
 
+ifneq ($(PRELOAD_KEY),)
+# Keep preloaded objects away from the normal build so it never inherits the key.
+ifeq ($(BUILD),build)
+$(error PRELOAD_KEY needs its own BUILD=<dir> (or use make novelty))
+endif
+CFLAGS += -DFORE_PRELOAD -I$(BUILD)
+$(BUILD)/fw/src/store.o: $(BUILD)/preload.h
+$(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id
+	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) --out-dir $(BUILD)
+# Regenerate when the key or slot changes.
+$(BUILD)/preload.id: FORCE
+	@mkdir -p $(BUILD)
+	@echo '$(PRELOAD_KEY) $(PRELOAD_SLOT)' | cmp -s - $@ || echo '$(PRELOAD_KEY) $(PRELOAD_SLOT)' > $@
+endif
+
+# A deliberately insecure novelty build: the private key is 4.
+novelty:
+	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=9a
+
 flash: $(BUILD)/fore.bin
 	st-flash --reset write $< 0x08000000
 
@@ -51,4 +75,4 @@ test:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all flash test clean
+.PHONY: all novelty flash test clean FORCE
