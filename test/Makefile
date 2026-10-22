@@ -35,13 +35,14 @@ $(BUILD)/test_piv: test_piv.c $(APPLET) $(HEADERS)
 
 # Factory-preloaded key (make PRELOAD_KEY=4), header from tools/gen-preload.py.
 $(BUILD)/preload/preload.h: ../tools/gen-preload.py
-	python3 ../tools/gen-preload.py --key 4 --out-dir $(BUILD)/preload
+	python3 ../tools/gen-preload.py --key 4 --cn 'fore insecure key (d = 0x4)' --out-dir $(BUILD)/preload
 
 $(BUILD)/test_preload: test_preload.c $(APPLET) $(HEADERS) $(BUILD)/preload/preload.h
 	$(CC) $(CFLAGS) -DFORE_PRELOAD -I$(BUILD)/preload -o $@ $(filter %.c,$^) -lcrypto
 
-# The same with a supplied certificate (make PRELOAD_CERT=...): one issued by a
-# throwaway P-256 CA. A certificate for a different key must be refused.
+# The same from files (make PRELOAD_KEY=<file> PRELOAD_CERT=<file>): the key as
+# PKCS#8 DER, and a certificate issued by a throwaway P-256 CA. A certificate
+# for a different key must be refused.
 CA := $(BUILD)/preload-ca
 $(CA)/preload.h: ../tools/gen-preload.py $(BUILD)/preload/preload.h
 	@mkdir -p $(CA)
@@ -52,7 +53,8 @@ $(CA)/preload.h: ../tools/gen-preload.py $(BUILD)/preload/preload.h
 		-days 30 -outform DER -out $(CA)/four.der
 	if python3 ../tools/gen-preload.py --key 5 --cert $(CA)/four.der --out-dir $(CA)/wrong; then \
 		echo "certificate for another key was accepted"; exit 1; fi
-	python3 ../tools/gen-preload.py --key 4 --cert $(CA)/four.der --out-dir $(CA)
+	openssl pkcs8 -topk8 -nocrypt -in $(BUILD)/preload/preload-key.pem -outform DER -out $(CA)/four.p8
+	python3 ../tools/gen-preload.py --key $(CA)/four.p8 --cert $(CA)/four.der --out-dir $(CA)
 
 $(BUILD)/test_preload_ca: test_preload.c $(APPLET) $(HEADERS) $(CA)/preload.h
 	$(CC) $(CFLAGS) -DFORE_PRELOAD -I$(CA) -o $@ $(filter %.c,$^) -lcrypto

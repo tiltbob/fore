@@ -96,12 +96,30 @@ the build stops; OpenSC takes the key's public half from the certificate. It can
 be up to 2040 bytes of DER. `build/novelty/preload-key.pem` is a ready-made key
 file to sign a CSR with.
 
-The general form is `make PRELOAD_KEY=<hex scalar> [PRELOAD_SLOT=9a|9c|9d|9e]
-[PRELOAD_CERT=<file>] BUILD=<dir>`, using a separate build directory per key.
-`make novelty` takes `PRELOAD_SLOT` and `PRELOAD_CERT` too. A preloaded key is
-compiled into the firmware image, so keep this for keys that are meant to be
-public. `tools/gen-preload.py` builds the header and needs the `openssl`
-command-line tool.
+### Preloading any key and certificate
+
+To bake in a key pair of your own, pass both files. Each build directory holds
+one key:
+
+```sh
+make BUILD=build/mykey PRELOAD_KEY=key.pem PRELOAD_CERT=cert.pem
+# then flash build/mykey/fore.elf as below
+```
+
+- `PRELOAD_KEY` is a P-384 private key file (PEM or DER, SEC1 `EC PRIVATE KEY`
+  or PKCS#8 `PRIVATE KEY`, unencrypted) or a hex scalar like `4`.
+- `PRELOAD_CERT` is optional. Without it you get a self-signed certificate,
+  CN "fore preloaded key", or whatever you set with `PRELOAD_CN`.
+- `PRELOAD_SLOT` picks 9a (the default), 9c, 9d or 9e.
+
+`make novelty` takes `PRELOAD_SLOT` and `PRELOAD_CERT` too. Editing either file
+rebuilds the image. `tools/gen-preload.py` builds the header and needs the
+`openssl` command-line tool.
+
+The private key is compiled into the firmware image in the clear, so anyone
+with the `.bin`, or SWD access to the dongle, has it. Use this for keys that are
+meant to be public or don't matter. For a key you care about, flash the
+normal build and import the key with `yubico-piv-tool` instead.
 
 ## Flash the dongle
 

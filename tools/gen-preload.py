@@ -2,6 +2,9 @@
 """Generate preload.h: a P-384 private key and its certificate, which become
 the firmware's factory defaults (make PRELOAD_KEY=... [PRELOAD_CERT=...]).
 
+The key is a hex scalar or a P-384 private key file (PEM or DER, SEC1 or
+PKCS#8).
+
 The certificate is either one you supply (--cert, PEM or DER, any issuer, but
 its public key must match the private key) or a generated self-signed one.
 
@@ -18,6 +21,8 @@ import os
 import subprocess
 import sys
 import tempfile
+
+SECP384R1_OID = bytes.fromhex("06052b81040022")
 
 # P-384 group order
 N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973", 16)
@@ -65,7 +70,57 @@ def c_array(name, data):
 def openssl(*args):
     env = dict(os.environ)
     env.pop("OPENSSL_CONF", None)  # a pkcs11 provider config has no business here
-    return subprocess.run(["openssl", *args], check=True, env=env, stdout=subprocess.PIPE).stdout
+    r = subprocess.run(["openssl", *args], env=env, capture_output=True)
+    if r.returncode:
+        sys.stderr.write(r.stderr.decode(errors="replace"))
+        raise subprocess.CalledProcessError(r.returncode, r.args)
+    return r.stdout
+
+
+def is_pem(path):
+    with open(path, "rb") as f:
+        return f.read().lstrip().startswith(b"-----BEGIN")
+
+
+def der_items(buf):
+    """Splits DER content into (tag, value) pairs."""
+    items, pos = [], 0
+    while pos < len(buf):
+        tag, n = buf[pos], buf[pos + 1]
+        pos += 2
+        if n & 0x80:
+            k = n & 0x7F
+            n = int.from_bytes(buf[pos:pos + k], "big")
+            pos += k
+        items.append((tag, buf[pos:pos + n]))
+        pos += n
+    return items
+
+
+def load_key(spec):
+    """--key: a hex scalar, or a P-384 private key file (PEM or DER, SEC1 or PKCS#8)."""
+    if not os.path.isfile(spec):
+        hexkey = spec.lower().removeprefix("0x")
+        try:
+            d = int(hexkey, 16)
+        except ValueError:
+            sys.exit("--key must be a hex scalar or a private key file: %s" % spec)
+        if len(hexkey) > 96:
+            sys.exit("--key: more than 384 bits")
+        return d
+    try:
+        sec1 = openssl("ec", "-inform", "PEM" if is_pem(spec) else "DER", "-in", spec,
+                       "-no_public", "-outform", "DER")
+    except subprocess.CalledProcessError:
+        sys.exit("%s: not an EC private key" % spec)
+    # ECPrivateKey ::= SEQUENCE { version, privateKey OCTET STRING, [0] parameters, ... }
+    try:
+        fields = dict(der_items(der_items(sec1)[0][1]))
+        if fields.get(0xA0) == SECP384R1_OID:
+            return int.from_bytes(fields[0x04], "big")
+    except (IndexError, KeyError):
+        pass
+    sys.exit("%s: not a P-384 (secp384r1) key" % spec)
 
 
 def self_signed(key_path, cn):
@@ -79,10 +134,8 @@ def self_signed(key_path, cn):
 
 def load_cert(path):
     """A PEM or DER certificate file, returned as DER (openssl parses it)."""
-    with open(path, "rb") as f:
-        pem = f.read().lstrip().startswith(b"-----BEGIN")
     try:
-        return openssl("x509", "-inform", "PEM" if pem else "DER", "-in", path, "-outform", "DER")
+        return openssl("x509", "-inform", "PEM" if is_pem(path) else "DER", "-in", path, "-outform", "DER")
     except subprocess.CalledProcessError:
         sys.exit("%s: not an X.509 certificate" % path)
 
@@ -96,19 +149,16 @@ def cert_pubkey(der):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--key", required=True, help="private scalar in hex, e.g. 4 or 0x00..04")
+    ap.add_argument("--key", required=True,
+                    help="private scalar in hex (e.g. 4) or a P-384 private key file (PEM or DER)")
     ap.add_argument("--slot", default="9a", choices=sorted(SLOTS))
     ap.add_argument("--cert", help="certificate to ship (PEM or DER) instead of a generated self-signed one")
     ap.add_argument("--cn", help="subject CN of the generated certificate")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args()
 
-    hexkey = args.key.lower().removeprefix("0x")
-    try:
-        d = int(hexkey, 16)
-    except ValueError:
-        sys.exit("--key must be hexadecimal")
-    if len(hexkey) > 96 or not 1 <= d < N:
+    d = load_key(args.key)
+    if not 1 <= d < N:
         sys.exit("--key must be a P-384 private scalar: 1 <= d < n")
     scalar = d.to_bytes(48, "big")
     index, tag = SLOTS[args.slot]
@@ -128,7 +178,7 @@ def main():
         cert = load_cert(args.cert)
         what = args.cert
     else:
-        cn = args.cn or "fore insecure key (d = 0x%x)" % d
+        cn = args.cn or "fore preloaded key"
         cert = self_signed(key_path, cn)
         what = "self-signed, CN=" + cn
     # OpenSC takes the key's public half from the certificate, so they must agree.

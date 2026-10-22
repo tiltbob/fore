@@ -2,7 +2,7 @@
 #
 #   make                      build build/fore.elf, .bin and .hex
 #   make USB_VID=0x.. USB_PID=0x..
-#   make PRELOAD_KEY=<hex> [PRELOAD_SLOT=9a] [PRELOAD_CERT=<pem|der>] BUILD=<dir>
+#   make PRELOAD_KEY=<hex|key file> [PRELOAD_SLOT=9a] [PRELOAD_CERT=<pem|der>] BUILD=<dir>
 #                             factory-default key and certificate (generated
 #                             self-signed unless PRELOAD_CERT is given)
 #   make novelty              the above with d = 4, in build/novelty
@@ -20,6 +20,7 @@ USB_PID ?= 0x0001
 PRELOAD_KEY ?=
 PRELOAD_SLOT ?= 9a
 PRELOAD_CERT ?=
+PRELOAD_CN ?=
 
 SRCS := stm32/startup.c stm32/main.c stm32/usb.c \
         src/ccid.c src/piv.c src/store.c src/p384.c src/sha512.c src/des.c
@@ -62,11 +63,13 @@ $(error PRELOAD_KEY needs its own BUILD=<dir> (or use make novelty))
 endif
 CFLAGS += -DFORE_PRELOAD -I$(BUILD)
 $(BUILD)/fw/src/store.o: $(BUILD)/preload.h
-$(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id $(PRELOAD_CERT)
+# PRELOAD_KEY is a hex scalar or a key file; a file is also a prerequisite.
+$(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id $(wildcard $(PRELOAD_KEY)) $(PRELOAD_CERT)
 	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) \
-		$(if $(PRELOAD_CERT),--cert $(PRELOAD_CERT)) --out-dir $(BUILD)
+		$(if $(PRELOAD_CERT),--cert $(PRELOAD_CERT)) $(if $(PRELOAD_CN),--cn '$(PRELOAD_CN)') \
+		--out-dir $(BUILD)
 # Regenerate when the key, slot or certificate choice changes.
-PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT)
+PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT) $(PRELOAD_CN)
 $(BUILD)/preload.id: FORCE
 	@mkdir -p $(BUILD)
 	@echo '$(PRELOAD_ID)' | cmp -s - $@ || echo '$(PRELOAD_ID)' > $@
@@ -74,7 +77,8 @@ endif
 
 # A deliberately insecure novelty build: the private key is 4.
 novelty:
-	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=$(PRELOAD_SLOT)
+	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=$(PRELOAD_SLOT) \
+		'PRELOAD_CN=fore insecure key (d = 0x4)'
 
 flash: $(BUILD)/fore.bin
 	st-flash --reset write $< 0x08000000
