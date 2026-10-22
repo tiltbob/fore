@@ -13,6 +13,7 @@
 #define PC_TO_RDR_RESET_PARAMETERS 0x6d
 #define PC_TO_RDR_SET_DATA_RATE 0x6e
 #define PC_TO_RDR_XFR_BLOCK 0x6f
+#define PC_TO_RDR_ABORT 0x72
 
 #define RDR_TO_PC_DATA_BLOCK 0x80
 #define RDR_TO_PC_SLOT_STATUS 0x81
@@ -39,9 +40,16 @@
 /* T=1 protocol data for (Get|Set|Reset)Parameters. */
 static const uint8_t T1_PARAMS[7] = {0x11, 0x10, 0x00, 0x4d, 0x00, 0xfe, 0x00};
 
+/*
+ * The interrupt fills rx while rx_ready is clear; once it is set, rx belongs
+ * to the main loop until ccid_poll() clears it. A bus reset or configuration
+ * change bumps session, which voids the reply to a command already in flight.
+ */
 static uint8_t rx[CCID_MAX_MSG];
 static volatile size_t rx_len; /* bytes of the current message seen, stored or not */
 static volatile uint8_t rx_ready;
+static volatile uint8_t session;
+static uint8_t rx_session; /* session the message in rx arrived in */
 static uint8_t tx[CCID_HDR_LEN + PIV_MAX_RESPONSE];
 static uint8_t powered;
 
@@ -56,6 +64,8 @@ int ccid_out_packet(const uint8_t *pkt, size_t len)
 
     if (rx_ready)
         return 0;
+    if (have == 0)
+        rx_session = session;
     if (have < sizeof(rx))
         memcpy(rx + have, pkt, len < sizeof(rx) - have ? len : sizeof(rx) - have);
     have += len;
@@ -67,14 +77,22 @@ int ccid_out_packet(const uint8_t *pkt, size_t len)
     return !rx_ready;
 }
 
+int ccid_out_ready(void)
+{
+    return !rx_ready;
+}
+
 void ccid_usb_reset(void)
 {
-    rx_len = 0;
-    rx_ready = 0;
+    session++;
+    if (!rx_ready)
+        rx_len = 0;
 }
 
 static void reply(uint8_t type, uint8_t status, uint8_t error, uint8_t b9, size_t len)
 {
+    if (rx_session != session)
+        return; /* the host that asked is gone */
     tx[0] = type;
     tx[1] = (uint8_t)len;
     tx[2] = (uint8_t)(len >> 8);
@@ -135,6 +153,7 @@ static void handle(size_t len)
         reply(rtype, ICC_INACTIVE, 0, 0, 0);
         break;
     case PC_TO_RDR_GET_SLOT_STATUS:
+    case PC_TO_RDR_ABORT: /* nothing is ever left running to abort */
         reply(rtype, icc, 0, 0, 0);
         break;
     case PC_TO_RDR_XFR_BLOCK:
@@ -181,7 +200,7 @@ void ccid_poll(void)
 {
     if (!rx_ready || usb_bulk_busy())
         return;
-    if (rx_len >= CCID_HDR_LEN)
+    if (rx_len >= CCID_HDR_LEN && rx_session == session)
         handle(rx_len);
     rx_len = 0;
     rx_ready = 0;

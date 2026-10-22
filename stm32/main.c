@@ -135,10 +135,11 @@ const uint8_t *device_uid(void)
 
 /*
  * Randomness for management key challenges. There is no TRNG on the F103,
- * so the pool is seeded from ADC noise on the temperature sensor and
- * reference, plus cycle-counter jitter, and every draw mixes in the cycle
- * counter (USB traffic timing makes that vary).
+ * so the pool is seeded from the power-up contents of unused SRAM and ADC
+ * noise on the temperature sensor and reference, and every draw mixes in the
+ * cycle counter (the host's USB timing is not locked to our crystal).
  */
+extern uint8_t _ebss[];
 static uint8_t pool[64];
 
 static void pool_mix(const void *data, size_t len, uint8_t label)
@@ -157,6 +158,11 @@ static void pool_mix(const void *data, size_t len, uint8_t label)
 static void rng_init(void)
 {
     uint16_t samples[256];
+
+    /* RAM between .bss and the stack has not been written since power-up
+     * (or still holds the previous run's state after a reset). Stay well
+     * clear of the stack the hashing itself uses. */
+    pool_mix(_ebss, (uintptr_t)samples - 2048 - (uintptr_t)_ebss, 'r');
 
     RCC_APB2ENR |= RCC_APB2ENR_ADC1EN;
     ADC1_CR2 = ADC_CR2_ADON | ADC_CR2_TSVREFE;
@@ -211,14 +217,16 @@ int main(void)
     platform_activity(1);
 
     /* The dongle has a fixed pull-up on D+, so hold D+ low for a moment to
-     * make the host notice a fresh attach after a reset or reflash. */
+     * make the host notice a fresh attach after a reset or reflash. Do the
+     * slow start-up work meanwhile: formatting a blank device erases every
+     * storage page, too long to keep an attached host waiting. */
     GPIOA_BRR = 1u << USB_DP_PIN;
     gpioa_mode(USB_DP_PIN, 0x2);
     rng_init();
+    piv_init();
     delay_ms(20);
     gpioa_mode(USB_DP_PIN, 0x4); /* floating input; the USB peripheral takes over */
 
-    piv_init();
     RCC_APB1ENR |= RCC_APB1ENR_USBEN;
     usb_init();
     NVIC_ISER0 = 1u << USB_LP_IRQ;

@@ -297,6 +297,19 @@ static void test_halt_and_reset(void)
     r = xfr(select, sizeof(select), resp, NULL);
     CHECK(r == 42, "CCID works after clearing halts");
 
+    /* SET_INTERFACE restarts the interface's data toggles at DATA0. */
+    if (!dev.toggle_out[1] || !dev.toggle_in[1])
+        xfr(select, sizeof(select), resp, NULL);
+    CHECK(dev.toggle_out[1] && dev.toggle_in[1], "toggles at DATA1 before SET_INTERFACE");
+    r = host_control(&dev, 0x01, 0x0b, 0, 0, NULL, 0);
+    CHECK(r == 0, "SET_INTERFACE(0, 0)");
+    dev.toggle_in[1] = dev.toggle_out[1] = 0;
+    r = xfr(select, sizeof(select), resp, NULL);
+    CHECK(r == 42, "CCID works after SET_INTERFACE");
+
+    r = ccid(0x72, 0, NULL, 0, resp, sizeof(resp), NULL);
+    CHECK(r == 10 && resp[0] == 0x81 && resp[7] == 0x00, "PC_to_RDR_Abort succeeds");
+
     /* Bus reset and re-enumerate: the device must come back. */
     uint8_t d[64], c[128];
     r = host_enumerate(&dev, 9, d, c, sizeof(c));

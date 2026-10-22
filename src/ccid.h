@@ -16,9 +16,12 @@
 /* Bulk OUT packet from the host (interrupt context). Returns 1 if the driver
  * should accept the next packet now, 0 to NAK until ccid_poll() re-enables. */
 int ccid_out_packet(const uint8_t *pkt, size_t len);
+/* True unless a complete command is waiting for (or in) ccid_poll(). */
+int ccid_out_ready(void);
 /* Main loop: handles a complete command message, if any. */
 void ccid_poll(void);
-/* USB bus reset or (de)configuration: drops any partial message. */
+/* USB bus reset or (de)configuration (interrupt context): drops any partial
+ * message, and the reply to a command still in flight. */
 void ccid_usb_reset(void);
 
 /* Provided by the USB driver. */

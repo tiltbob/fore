@@ -198,6 +198,19 @@ static void ep_setup(unsigned ep, uint16_t type, uint16_t tx, uint16_t rx)
                     ((v & EP_STAT_TX) ^ tx) | ((v & EP_STAT_RX) ^ rx));
 }
 
+/* Resets the data toggles in mask to DATA0, leaving STAT alone. */
+static void reset_toggles(unsigned ep, uint16_t mask)
+{
+    uint16_t v = rd(EPR(ep));
+    wr(EPR(ep), (v & EP_RW) | (v & mask) | EP_CTR_RX | EP_CTR_TX);
+}
+
+/* Bulk OUT accepts data unless a complete command is still being handled. */
+static uint16_t bulk_rx_stat(void)
+{
+    return ccid_out_ready() ? RX_VALID : RX_NAK;
+}
+
 static void clear_ctr_rx(unsigned ep)
 {
     wr(EPR(ep), (rd(EPR(ep)) & EP_RW) | EP_CTR_TX);
@@ -321,7 +334,7 @@ static void configure(uint8_t value)
     ccid_usb_reset();
     if (value) {
         static const uint8_t notify[2] = {0x50, 0x03}; /* NotifySlotChange: card present, changed */
-        ep_setup(BULK_EP, EP_BULK, TX_NAK, RX_VALID);
+        ep_setup(BULK_EP, EP_BULK, TX_NAK, bulk_rx_stat());
         ep_setup(INT_EP, EP_INTERRUPT, TX_NAK, RX_DISABLED);
         pma_write(EP2_TX_BUF, notify, 2);
         pma_wr(BT_COUNT_TX(INT_EP), 2);
@@ -339,22 +352,20 @@ static int ep_halt(unsigned addr, int halt)
 
     if (!configured || ep == 0 || ep > INT_EP || (ep == INT_EP && !(addr & 0x80)))
         return -1;
+    /* Clearing a halt also resets the data toggle. */
     if (addr & 0x80) {
-        uint16_t v = rd(EPR(ep));
         if (halt) {
             set_stat_tx(ep, TX_STALL);
         } else {
-            /* Clearing a halt resets the data toggle. */
-            wr(EPR(ep), (v & EP_RW) | (v & EP_DTOG_TX) | EP_CTR_RX | EP_CTR_TX);
+            reset_toggles(ep, EP_DTOG_TX);
             set_stat_tx(ep, ep == BULK_EP && bulk_busy ? TX_VALID : TX_NAK);
         }
     } else {
-        uint16_t v = rd(EPR(ep));
         if (halt) {
             set_stat_rx(ep, RX_STALL);
         } else {
-            wr(EPR(ep), (v & EP_RW) | (v & EP_DTOG_RX) | EP_CTR_RX | EP_CTR_TX);
-            set_stat_rx(ep, RX_VALID);
+            reset_toggles(ep, EP_DTOG_RX);
+            set_stat_rx(ep, bulk_rx_stat());
         }
     }
     return 0;
@@ -451,21 +462,26 @@ static void handle_setup(void)
         else
             ep0_stall();
         return;
-    case 0x0b: /* SET_INTERFACE */
-        if (configured && index == 0 && value == 0)
+    case 0x0b: /* SET_INTERFACE: also restarts the interface's data toggles */
+        if (configured && index == 0 && value == 0) {
+            reset_toggles(BULK_EP, EP_DTOG_RX | EP_DTOG_TX);
+            reset_toggles(INT_EP, EP_DTOG_TX);
             ep0_status();
-        else
+        } else
             ep0_stall();
         return;
     }
     ep0_stall();
 }
 
-static void ep0_in_done(void)
+/* setup_pending: a new SETUP arrived too, which supersedes any data stage. */
+static void ep0_in_done(int setup_pending)
 {
     switch (ctl.state) {
     case CTL_DATA_IN:
-        if (ctl.left) {
+        if (setup_pending) {
+            ctl.state = CTL_IDLE;
+        } else if (ctl.left) {
             ep0_send_next();
         } else if (ctl.zlp) {
             ctl.zlp = 0;
@@ -523,7 +539,7 @@ void usb_irq(void)
         if (v & EP_CTR_TX) {
             clear_ctr_tx(ep);
             if (ep == 0) {
-                ep0_in_done();
+                ep0_in_done((v & (EP_CTR_RX | EP_SETUP)) == (EP_CTR_RX | EP_SETUP));
             } else if (ep == BULK_EP && bulk_busy) {
                 if (bulk_left) {
                     bulk_send_next();

@@ -237,8 +237,8 @@ certificates and credentials back to the defaults.
 - P-384 only. No RSA, P-256, Ed25519 or X25519.
 - No on-card key generation: the STM32F103 has no hardware RNG, so keys come
   from the host. The random numbers the card does need (management key
-  challenges) come from ADC noise and timing jitter. ECDSA nonces are
-  deterministic (RFC 6979) and need no randomness.
+  challenges) come from power-up SRAM contents, ADC noise and USB timing.
+  ECDSA nonces are deterministic (RFC 6979) and need no randomness.
 - 3DES management key only; no AES management keys, touch policies,
   attestation, key metadata or secure messaging. `ykman` will not work.
 - A P-384 signature or ECDH takes roughly half a second to a second (an
@@ -249,6 +249,10 @@ certificates and credentials back to the defaults.
   protection has published bypasses, and the Cortex-M3 multiplier's timing
   depends on its operands. The arithmetic avoids secret-dependent branches and
   table lookups, but nothing here is hardened against physical attacks.
+- The management key challenge is only as unpredictable as the boot-time
+  entropy: power-up SRAM contents and ADC noise, neither measured on real
+  chips. A guessable challenge would let someone authenticate as the management
+  key without knowing it.
 - The firmware has been tested against a model of the USB peripheral and the
   real host stack (below), not yet on a physical dongle.
 
