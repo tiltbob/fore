@@ -13,11 +13,12 @@ APPLET := ../src/piv.c ../src/store.c ../host/platform_host.c $(CRYPTO)
 USB := ../stm32/usb.c ../src/ccid.c usb_mock.c
 HEADERS := $(wildcard ../src/*.h ../stm32/*.h ../host/*.h *.h)
 
-all: $(BUILD)/test_crypto $(BUILD)/test_usb $(BUILD)/test_piv $(BUILD)/test_preload
+all: $(BUILD)/test_crypto $(BUILD)/test_usb $(BUILD)/test_piv $(BUILD)/test_preload $(BUILD)/test_preload_ca
 	$(BUILD)/test_crypto
 	$(BUILD)/test_piv
 	$(BUILD)/test_usb
 	$(BUILD)/test_preload
+	$(BUILD)/test_preload_ca
 
 e2e: all $(BUILD)/vpcd_card $(BUILD)/vpcd_card_novelty $(BUILD)/libfakeusb.so
 	./e2e.sh vpcd
@@ -38,6 +39,23 @@ $(BUILD)/preload/preload.h: ../tools/gen-preload.py
 
 $(BUILD)/test_preload: test_preload.c $(APPLET) $(HEADERS) $(BUILD)/preload/preload.h
 	$(CC) $(CFLAGS) -DFORE_PRELOAD -I$(BUILD)/preload -o $@ $(filter %.c,$^) -lcrypto
+
+# The same with a supplied certificate (make PRELOAD_CERT=...): one issued by a
+# throwaway P-256 CA. A certificate for a different key must be refused.
+CA := $(BUILD)/preload-ca
+$(CA)/preload.h: ../tools/gen-preload.py $(BUILD)/preload/preload.h
+	@mkdir -p $(CA)
+	openssl ecparam -name prime256v1 -genkey -noout -out $(CA)/ca.key
+	openssl req -new -x509 -key $(CA)/ca.key -subj "/CN=fore test CA" -days 30 -out $(CA)/ca.pem
+	openssl req -new -key $(BUILD)/preload/preload-key.pem -subj "/CN=four" -out $(CA)/four.csr
+	openssl x509 -req -in $(CA)/four.csr -CA $(CA)/ca.pem -CAkey $(CA)/ca.key -set_serial 4 \
+		-days 30 -outform DER -out $(CA)/four.der
+	if python3 ../tools/gen-preload.py --key 5 --cert $(CA)/four.der --out-dir $(CA)/wrong; then \
+		echo "certificate for another key was accepted"; exit 1; fi
+	python3 ../tools/gen-preload.py --key 4 --cert $(CA)/four.der --out-dir $(CA)
+
+$(BUILD)/test_preload_ca: test_preload.c $(APPLET) $(HEADERS) $(CA)/preload.h
+	$(CC) $(CFLAGS) -DFORE_PRELOAD -I$(CA) -o $@ $(filter %.c,$^) -lcrypto
 
 $(BUILD)/test_usb: test_usb.c $(USB) $(APPLET) $(HEADERS)
 	@mkdir -p $(BUILD)

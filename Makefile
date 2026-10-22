@@ -2,8 +2,9 @@
 #
 #   make                      build build/fore.elf, .bin and .hex
 #   make USB_VID=0x.. USB_PID=0x..
-#   make PRELOAD_KEY=<hex> [PRELOAD_SLOT=9a] BUILD=<dir>
-#                             factory-default key + self-signed certificate
+#   make PRELOAD_KEY=<hex> [PRELOAD_SLOT=9a] [PRELOAD_CERT=<pem|der>] BUILD=<dir>
+#                             factory-default key and certificate (generated
+#                             self-signed unless PRELOAD_CERT is given)
 #   make novelty              the above with d = 4, in build/novelty
 #   make flash                program over SWD with st-flash
 #   make test                 run the host test suites
@@ -18,6 +19,7 @@ USB_VID ?= 0x1209
 USB_PID ?= 0x0001
 PRELOAD_KEY ?=
 PRELOAD_SLOT ?= 9a
+PRELOAD_CERT ?=
 
 SRCS := stm32/startup.c stm32/main.c stm32/usb.c \
         src/ccid.c src/piv.c src/store.c src/p384.c src/sha512.c src/des.c
@@ -47,6 +49,12 @@ $(BUILD)/fore.hex: $(BUILD)/fore.elf
 
 -include $(OBJS:.o=.d)
 
+ifneq ($(PRELOAD_CERT),)
+ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)
+$(error PRELOAD_CERT needs PRELOAD_KEY, the private key it belongs to)
+endif
+endif
+
 ifneq ($(PRELOAD_KEY),)
 # Keep preloaded objects away from the normal build so it never inherits the key.
 ifeq ($(BUILD),build)
@@ -54,17 +62,19 @@ $(error PRELOAD_KEY needs its own BUILD=<dir> (or use make novelty))
 endif
 CFLAGS += -DFORE_PRELOAD -I$(BUILD)
 $(BUILD)/fw/src/store.o: $(BUILD)/preload.h
-$(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id
-	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) --out-dir $(BUILD)
-# Regenerate when the key or slot changes.
+$(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id $(PRELOAD_CERT)
+	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) \
+		$(if $(PRELOAD_CERT),--cert $(PRELOAD_CERT)) --out-dir $(BUILD)
+# Regenerate when the key, slot or certificate choice changes.
+PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT)
 $(BUILD)/preload.id: FORCE
 	@mkdir -p $(BUILD)
-	@echo '$(PRELOAD_KEY) $(PRELOAD_SLOT)' | cmp -s - $@ || echo '$(PRELOAD_KEY) $(PRELOAD_SLOT)' > $@
+	@echo '$(PRELOAD_ID)' | cmp -s - $@ || echo '$(PRELOAD_ID)' > $@
 endif
 
 # A deliberately insecure novelty build: the private key is 4.
 novelty:
-	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=9a
+	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=$(PRELOAD_SLOT)
 
 flash: $(BUILD)/fore.bin
 	st-flash --reset write $< 0x08000000

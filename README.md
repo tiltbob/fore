@@ -84,10 +84,23 @@ The key and certificate are the factory defaults. They are written on the first
 boot of a blank (mass-erased) chip and come back after `yubico-piv-tool -a
 reset`. Importing your own key or certificate replaces them as usual.
 
-The general form is `make PRELOAD_KEY=<hex scalar> PRELOAD_SLOT=9a|9c|9d|9e
-BUILD=<dir>`, using a separate build directory per key. A preloaded key is
+To ship your own certificate instead of the generated one, for example one
+issued by a CA or with a different subject, pass it in PEM or DER form:
+
+```sh
+make novelty PRELOAD_CERT=four.pem
+```
+
+The certificate's public key must match the preloaded private key, otherwise
+the build stops; OpenSC takes the key's public half from the certificate. It can
+be up to 2040 bytes of DER. `build/novelty/preload-key.pem` is a ready-made key
+file to sign a CSR with.
+
+The general form is `make PRELOAD_KEY=<hex scalar> [PRELOAD_SLOT=9a|9c|9d|9e]
+[PRELOAD_CERT=<file>] BUILD=<dir>`, using a separate build directory per key.
+`make novelty` takes `PRELOAD_SLOT` and `PRELOAD_CERT` too. A preloaded key is
 compiled into the firmware image, so keep this for keys that are meant to be
-public. `tools/gen-preload.py` makes the certificate, which needs the `openssl`
+public. `tools/gen-preload.py` builds the header and needs the `openssl`
 command-line tool.
 
 ## Flash the dongle
@@ -276,7 +289,9 @@ make -C test e2e       # pcscd + OpenSC + yubico-piv-tool + OpenSSL, twice
   multi-packet control and bulk transfers, ZLPs, data toggles, halts, time
   extensions and bus resets.
 - `test_preload`: the novelty build's d = 4 key and certificate: present on a
-  blank device, replaceable, and restored by a reset.
+  blank device, replaceable, and restored by a reset. It runs twice, once with
+  the generated certificate and once with a CA-issued one supplied through
+  `--cert`.
 
 `make -C test e2e` additionally needs `pcscd libccid vsmartcard-vpcd opensc
 yubico-piv-tool pkcs11-provider libengine-pkcs11-openssl libusb-1.0-0-dev`, and
