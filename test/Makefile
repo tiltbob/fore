@@ -13,20 +13,23 @@ APPLET := ../src/piv.c ../src/store.c ../host/platform_host.c $(CRYPTO)
 USB := ../stm32/usb.c ../src/ccid.c usb_mock.c
 HEADERS := $(wildcard ../src/*.h ../stm32/*.h ../host/*.h *.h)
 
-all: $(BUILD)/test_crypto $(BUILD)/test_usb $(BUILD)/test_piv $(BUILD)/test_preload $(BUILD)/test_preload_ca
+all: $(BUILD)/test_crypto $(BUILD)/test_usb $(BUILD)/test_piv $(BUILD)/test_preload $(BUILD)/test_preload_ca \
+		$(BUILD)/test_preload_locked
 	$(BUILD)/test_crypto
 	$(BUILD)/test_piv
 	$(BUILD)/test_usb
 	$(BUILD)/test_preload
 	$(BUILD)/test_preload_ca
+	$(BUILD)/test_preload_locked
 
-e2e: all $(BUILD)/vpcd_card $(BUILD)/vpcd_card_novelty $(BUILD)/libfakeusb.so
+e2e: all $(BUILD)/vpcd_card $(BUILD)/vpcd_card_novelty $(BUILD)/vpcd_card_locked $(BUILD)/libfakeusb.so
 	cp /usr/lib/pcsc/drivers/ifd-ccid.bundle/Contents/Info.plist $(BUILD)/Info.plist
 	python3 ../tools/ccid-add-id.py --vid 0x1209 --pid 0x0001 --plist $(BUILD)/Info.plist
 	grep -q '<string>fore PIV</string>' $(BUILD)/Info.plist
 	./e2e.sh vpcd
 	./e2e.sh usb
 	./e2e.sh novelty
+	./e2e.sh locked
 
 $(BUILD)/test_crypto: test_crypto.c $(CRYPTO) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -62,6 +65,10 @@ $(CA)/preload.h: ../tools/gen-preload.py $(BUILD)/preload/preload.h
 $(BUILD)/test_preload_ca: test_preload.c $(APPLET) $(HEADERS) $(CA)/preload.h
 	$(CC) $(CFLAGS) -DFORE_PRELOAD -I$(CA) -o $@ $(filter %.c,$^) -lcrypto
 
+# Locked build (make PRELOAD_LOCKED=1): the d = 4 key can't be replaced or removed.
+$(BUILD)/test_preload_locked: test_preload.c $(APPLET) $(HEADERS) $(BUILD)/preload/preload.h
+	$(CC) $(CFLAGS) -DFORE_PRELOAD -DFORE_LOCKED -I$(BUILD)/preload -o $@ $(filter %.c,$^) -lcrypto
+
 $(BUILD)/test_usb: test_usb.c $(USB) $(APPLET) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -DUSB_HW_MOCK -o $@ $(filter %.c,$^) -lpthread
@@ -72,6 +79,10 @@ $(BUILD)/vpcd_card: ../host/vpcd_card.c $(APPLET) $(HEADERS)
 
 $(BUILD)/vpcd_card_novelty: ../host/vpcd_card.c $(APPLET) $(HEADERS) $(BUILD)/preload/preload.h
 	$(CC) -O2 -g -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -DFORE_PRELOAD -I$(BUILD)/preload \
+		-o $@ $(filter %.c,$^)
+
+$(BUILD)/vpcd_card_locked: ../host/vpcd_card.c $(APPLET) $(HEADERS) $(BUILD)/preload/preload.h
+	$(CC) -O2 -g -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -DFORE_PRELOAD -DFORE_LOCKED -I$(BUILD)/preload \
 		-o $@ $(filter %.c,$^)
 
 # Stand-in for libusb-1.0 that routes libccid's USB traffic into the firmware's

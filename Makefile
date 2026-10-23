@@ -5,6 +5,8 @@
 #   make PRELOAD_KEY=<hex|key file> [PRELOAD_SLOT=9a] [PRELOAD_CERT=<pem|der>] BUILD=<dir>
 #                             factory-default key and certificate (generated
 #                             self-signed unless PRELOAD_CERT is given)
+#   make ... PRELOAD_LOCKED=1   locked: only the preloaded key exists, and it
+#                             cannot be replaced or deleted over the card interface
 #   make novelty              the above with d = 4, in build/novelty
 #   make flash                program over SWD with st-flash
 #   make test                 run the host test suites
@@ -21,6 +23,7 @@ PRELOAD_KEY ?=
 PRELOAD_SLOT ?= 9a
 PRELOAD_CERT ?=
 PRELOAD_CN ?=
+PRELOAD_LOCKED ?= 0
 
 SRCS := stm32/startup.c stm32/main.c stm32/usb.c \
         src/ccid.c src/piv.c src/store.c src/p384.c src/sha512.c src/des.c
@@ -61,21 +64,29 @@ ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)
 $(error PRELOAD_CERT needs PRELOAD_KEY, the private key it belongs to)
 endif
 endif
+ifneq ($(filter-out 0 1,$(PRELOAD_LOCKED)),)
+$(error PRELOAD_LOCKED must be 0 or 1)
+endif
+ifeq ($(PRELOAD_LOCKED),1)
+ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)
+$(error PRELOAD_LOCKED needs PRELOAD_KEY, the key to lock in)
+endif
+endif
 
 ifneq ($(PRELOAD_KEY),)
 # Keep preloaded objects away from the normal build so it never inherits the key.
 ifeq ($(BUILD),build)
 $(error PRELOAD_KEY needs its own BUILD=<dir> (or use make novelty))
 endif
-CFLAGS += -DFORE_PRELOAD -I$(BUILD)
-$(BUILD)/fw/src/store.o: $(BUILD)/preload.h
+CFLAGS += -DFORE_PRELOAD $(if $(filter 1,$(PRELOAD_LOCKED)),-DFORE_LOCKED) -I$(BUILD)
+$(BUILD)/fw/src/store.o $(BUILD)/fw/src/piv.o: $(BUILD)/preload.h
 # PRELOAD_KEY is a hex scalar or a key file; a file is also a prerequisite.
 $(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id $(wildcard $(PRELOAD_KEY)) $(PRELOAD_CERT)
 	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) \
 		$(if $(PRELOAD_CERT),--cert $(PRELOAD_CERT)) $(if $(PRELOAD_CN),--cn '$(PRELOAD_CN)') \
 		--out-dir $(BUILD)
-# Regenerate when the key, slot or certificate choice changes.
-PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT) $(PRELOAD_CN)
+# Regenerate (and recompile its users) when any preload setting changes.
+PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT) $(PRELOAD_CN) $(PRELOAD_LOCKED)
 $(BUILD)/preload.id: FORCE
 	@mkdir -p $(BUILD)
 	@echo '$(PRELOAD_ID)' | cmp -s - $@ || echo '$(PRELOAD_ID)' > $@

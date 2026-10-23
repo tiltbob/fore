@@ -6,6 +6,7 @@
 #   ./e2e.sh usb    full firmware USB path: the stock libccid talks to stm32/usb.c
 #                   through a fake libusb (test/fake_libusb.c) and the peripheral model
 #   ./e2e.sh novelty  vpcd with the factory-preloaded d = 4 key (make novelty)
+#   ./e2e.sh locked   the same, locked (make novelty PRELOAD_LOCKED=1)
 #
 # Starts its own pcscd, so no other pcscd may be running.
 set -euo pipefail
@@ -41,9 +42,10 @@ start_pcscd() {
 
 CARD=$BUILD/vpcd_card
 [ "$MODE" = novelty ] && CARD=$BUILD/vpcd_card_novelty
+[ "$MODE" = locked ] && CARD=$BUILD/vpcd_card_locked
 
 case $MODE in
-vpcd | novelty)
+vpcd | novelty | locked)
     cat >"$WORK/readers/vpcd" <<EOF
 FRIENDLYNAME "Virtual PCD"
 DEVICENAME   /dev/null:0x8C7B
@@ -68,7 +70,7 @@ EOF
     READER="SecurID"
     ;;
 *)
-    fail "mode must be vpcd, usb or novelty"
+    fail "mode must be vpcd, usb, novelty or locked"
     ;;
 esac
 
@@ -100,7 +102,7 @@ pkcs11-module-token-pin = 123456
 activate = 1
 EOF
 
-if [ "$MODE" = novelty ]; then
+if [ "$MODE" = novelty ] || [ "$MODE" = locked ]; then
     PRE=$BUILD/preload
     step "factory key d = 4 in slot 9A"
     "${PIV[@]}" -a status | tee status.txt
@@ -116,6 +118,22 @@ if [ "$MODE" = novelty ]; then
     step "and anyone can forge it"
     openssl dgst -sha384 -sign "$PRE/preload-key.pem" -out forged.sig msg.txt
     openssl dgst -sha384 -verify card-pub.pem -signature forged.sig msg.txt
+
+    if [ "$MODE" = locked ]; then
+        step "locked: the key and certificate cannot be replaced or removed"
+        openssl ecparam -name secp384r1 -genkey -noout -out other.pem
+        openssl req -new -x509 -key other.pem -out other.crt -days 30 -subj "/CN=other"
+        for s in 9a 9c; do
+            if "${PIV[@]}" -a import-key -s $s -i other.pem; then fail "key import into $s accepted"; fi
+        done
+        if "${PIV[@]}" -a import-certificate -s 9a -i other.crt; then fail "certificate import accepted"; fi
+        if "${PIV[@]}" -a delete-certificate -s 9a; then fail "certificate delete accepted"; fi
+        for _ in 1 2 3; do "${PIV[@]}" -P 000000 -a verify-pin || true; done
+        for _ in 1 2 3; do "${PIV[@]}" -P 00000000 -N 123456 -a unblock-pin || true; done
+        "${PIV[@]}" -a reset
+        "${PIV[@]}" -a status | grep -q "CN=fore insecure key (d = 0x4)" || fail "reset removed the certificate"
+        "${PIV[@]}" -P 123456 -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
+    fi
     echo
     echo "e2e ($MODE): all tests passed"
     exit 0

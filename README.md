@@ -115,9 +115,33 @@ make BUILD=build/mykey PRELOAD_KEY=key.pem PRELOAD_CERT=cert.pem
   CN "fore preloaded key", or whatever you set with `PRELOAD_CN`.
 - `PRELOAD_SLOT` picks 9a (the default), 9c, 9d or 9e.
 
-`make novelty` takes `PRELOAD_SLOT` and `PRELOAD_CERT` too. Editing either file
-rebuilds the image. `tools/gen-preload.py` builds the header and needs the
-`openssl` command-line tool.
+`make novelty` takes `PRELOAD_SLOT`, `PRELOAD_CERT` and `PRELOAD_LOCKED` too.
+Editing either file rebuilds the image. `tools/gen-preload.py` builds the
+header and needs the `openssl` command-line tool.
+
+### Locked builds
+
+Add `PRELOAD_LOCKED=1` to make the preloaded key the only key the device will
+ever use:
+
+```sh
+make BUILD=build/mykey PRELOAD_KEY=key.pem PRELOAD_CERT=cert.pem PRELOAD_LOCKED=1
+make novelty PRELOAD_LOCKED=1            # d = 4, and it stays that way
+```
+
+- The key and certificate are read straight from the firmware image, not from
+  the storage pages, so there is nothing to overwrite or erase.
+- Key imports into any slot, and writing or deleting any certificate, fail with
+  6A81 (function not supported).
+- A PIV reset (`yubico-piv-tool -a reset`) restores the default PIN, PUK and
+  management key and clears the other data objects; the key and certificate stay.
+- Keys or certificates that an earlier, unlocked build left in storage are
+  ignored.
+- The PIN, PUK, management key, CHUID and CCC work as usual.
+
+The lock covers the smart card interface only. Over SWD the dongle can still be
+read or reflashed with other firmware, unless you enable read-out protection,
+and removing that protection mass-erases the chip, firmware included.
 
 The private key is compiled into the firmware image in the clear, so anyone
 with the `.bin`, or SWD access to the dongle, has it. Use this for keys that are
@@ -308,17 +332,19 @@ make -C test e2e       # pcscd + OpenSC + yubico-piv-tool + OpenSSL, twice
   multi-packet control and bulk transfers, ZLPs, data toggles, halts, time
   extensions and bus resets.
 - `test_preload`: the novelty build's d = 4 key and certificate: present on a
-  blank device, replaceable, and restored by a reset. It runs twice, once with
-  the generated certificate and once with a CA-issued one supplied through
-  `--cert`.
+  blank device, replaceable, and restored by a reset. It runs three times:
+  with the generated certificate, with a CA-issued one supplied through
+  `--cert`, and as a locked build, where it checks that nothing can replace or
+  remove the key.
 
 `make -C test e2e` additionally needs `pcscd libccid vsmartcard-vpcd opensc
 yubico-piv-tool pkcs11-provider libengine-pkcs11-openssl libusb-1.0-0-dev`, and
 starts its own pcscd (stop any running one). It runs the same scenario twice:
 once with the applet behind the vpcd virtual reader, and once with the stock,
 unmodified libccid talking to the firmware's own USB driver through a fake libusb
-(`test/fake_libusb.c`) LD_PRELOADed into pcscd. A third, short run checks the
-novelty build: the card signs as d = 4, and so does anyone else.
+(`test/fake_libusb.c`) LD_PRELOADed into pcscd. Two short runs check the
+novelty build (the card signs as d = 4, and so does anyone else) and its locked
+variant (imports, certificate changes and a reset all leave d = 4 in place).
 
 ## Layout
 

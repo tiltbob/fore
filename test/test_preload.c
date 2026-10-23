@@ -2,6 +2,9 @@
  * Preloaded factory key (make PRELOAD_KEY=...): built with the d = 4 header
  * from tools/gen-preload.py. The key and certificate appear on a blank device,
  * stay replaceable, survive reboots once replaced, and come back on reset.
+ *
+ * Built with FORE_LOCKED (make PRELOAD_LOCKED=1) it checks the opposite: no
+ * command replaces or removes them, and nothing left in storage is used.
  */
 #define OPENSSL_SUPPRESS_DEPRECATED
 #include <openssl/bn.h>
@@ -16,7 +19,14 @@
 #include "../host/platform_host.h"
 #include "../src/des.h"
 #include "../src/piv.h"
+#include "../src/store.h"
 #include "preload.h"
+
+#ifdef FORE_LOCKED
+#define NAME "preload (locked)"
+#else
+#define NAME "preload"
+#endif
 
 static int failures;
 
@@ -123,8 +133,6 @@ static const uint8_t *skip_header(const uint8_t *p)
 
 int main(void)
 {
-    static uint8_t cert[2048];
-
     /* The certificate's public key is 4G. */
     const uint8_t *p = skip_header(skip_header(preload_cert)); /* 53 L { 70 L <cert> ... } */
     X509 *x = d2i_X509(NULL, &p, (long)(preload_cert + sizeof(preload_cert) - p));
@@ -140,7 +148,6 @@ int main(void)
     piv_init();
     check_factory_state("first boot");
 
-    /* Replace the key and drop the certificate; a reboot keeps the change. */
     static const uint8_t mgm[24] = {1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8};
     CHECK(SEND(0x00, 0x87, 0x03, 0x9b, 0x04, 0x7c, 0x02, 0x81, 0x00) == 0x9000, "challenge");
     uint8_t auth[17] = {0x00, 0x87, 0x03, 0x9b, 0x0c, 0x7c, 0x0a, 0x82, 0x08};
@@ -148,21 +155,58 @@ int main(void)
     CHECK(send(auth, sizeof(auth)) == 0x9000, "management key");
     uint8_t imp[55] = {0x00, 0xfe, 0x14, 0x9a, 0x32, 0x06, 0x30};
     imp[54] = 7;
+
+#ifdef FORE_LOCKED
+    /* Nothing may replace or remove the key or its certificate. */
+    static const uint8_t slots[] = {0x9a, 0x9c, 0x9d, 0x9e};
+    for (unsigned i = 0; i < sizeof(slots); i++) {
+        imp[3] = slots[i];
+        CHECK(send(imp, sizeof(imp)) == 0x6a81, "import into %02x refused", slots[i]);
+    }
+    CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x0a, 0x5c, 0x03, 0x5f, 0xc1, 0x05, 0x53, 0x03, 0x70, 0x01, 0x00) == 0x6a81,
+          "certificate overwrite refused");
+    CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x07, 0x5c, 0x03, 0x5f, 0xc1, 0x05, 0x53, 0x00) == 0x6a81,
+          "certificate delete refused");
+    CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x0a, 0x5c, 0x03, 0x5f, 0xc1, 0x0a, 0x53, 0x03, 0x70, 0x01, 0x00) == 0x6a81,
+          "certificate for another slot refused");
+    CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x0a, 0x5c, 0x03, 0x5f, 0xc1, 0x07, 0x53, 0x03, 0x01, 0x02, 0x03) == 0x9000,
+          "other objects stay writable");
+
+    /* Keys and certificates another build left in storage are never used. */
+    for (int i = 0; i < NUM_KEYS; i++) {
+        g_state.keys[i].present = 1;
+        memcpy(g_state.keys[i].priv, imp + 7, 48); /* d = 7 */
+    }
+    store_save();
+    store_put_object(store_object_index(0x5fc105), (const uint8_t *)"\x53\x03\x70\x01\x00", 5);
+    store_put_object(store_object_index(0x5fc10a), (const uint8_t *)"\x53\x03\x70\x01\x00", 5);
+    piv_init();
+    check_factory_state("stale storage");
+    CHECK(SEND(0x00, 0xcb, 0x3f, 0xff, 0x05, 0x5c, 0x03, 0x5f, 0xc1, 0x0a, 0x00) == 0x6a82,
+          "stale 9C certificate hidden");
+    CHECK(SEND(0x00, 0x87, 0x14, 0x9c, 0x36, 0x7c, 0x34, 0x82, 0x00, 0x81, 0x30, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+               11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
+               34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48) == 0x6a88,
+          "stale 9C key unusable");
+#else
+    /* Replace the key and drop the certificate; a reboot keeps the change. */
+    static uint8_t cert[2048];
+    uint8_t digest[48] = {9};
     CHECK(send(imp, sizeof(imp)) == 0x9000, "import d = 7");
     CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x07, 0x5c, 0x03, 0x5f, 0xc1, 0x05, 0x53, 0x00) == 0x9000, "delete cert");
     piv_init();
     CHECK(get_cert(cert) == 0, "deleted certificate stays deleted after reboot");
-    uint8_t digest[48] = {9};
     SEND(0x00, 0x20, 0x00, 0x80, 0x08, '1', '2', '3', '4', '5', '6', 0xff, 0xff);
     CHECK(sign9a(digest) == 0x9000 && !signed_by_4(digest), "imported key replaced d = 4");
+#endif
 
     block_and_reset();
     check_factory_state("after reset");
 
     if (failures) {
-        printf("preload: %d failures\n", failures);
+        printf(NAME ": %d failures\n", failures);
         return 1;
     }
-    printf("preload: all tests passed\n");
+    printf(NAME ": all tests passed\n");
     return 0;
 }
