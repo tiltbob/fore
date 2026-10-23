@@ -56,8 +56,13 @@ should work, but are untested.
 
 ## Build
 
-Needs `arm-none-eabi-gcc` with newlib (`gcc-arm-none-eabi` and
-`libnewlib-arm-none-eabi` on Debian/Ubuntu).
+Needs `arm-none-eabi-gcc` with newlib, plus Python 3 and the `openssl` command
+for preloaded builds:
+
+- Debian/Ubuntu: `gcc-arm-none-eabi libnewlib-arm-none-eabi`
+- Arch: `arm-none-eabi-gcc arm-none-eabi-newlib` (newlib is only an optional
+  dependency of the compiler there; without it the build stops at
+  `string.h: No such file or directory`)
 
 ```sh
 make                                  # build/fore.elf, fore.bin, fore.hex
@@ -174,7 +179,9 @@ openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
     -c "program build/fore.elf verify reset exit"
 ```
 
-`make flash` does the second step with `st-flash` instead. CKS32-based clones
+OpenOCD is `openocd` on both Debian/Ubuntu and Arch. `make flash` does the
+second step with `st-flash` instead (`stlink-tools` on Debian/Ubuntu, `stlink`
+on Arch). CKS32-based clones
 report a different core ID; add `-c "set CPUTAPID 0x2ba01477"` before `-f
 target/stm32f1x.cfg`.
 
@@ -183,9 +190,17 @@ or `unlock` wipes them.
 
 ## Host setup
 
-Install pcscd and OpenSC (`pcscd libccid opensc` on Debian/Ubuntu), plus
-`yubico-piv-tool` for loading keys and either `pkcs11-provider` or
-`libengine-pkcs11-openssl` for OpenSSL.
+Install pcscd and OpenSC, plus `yubico-piv-tool` for loading keys and a
+PKCS#11 bridge for OpenSSL (pkcs11-provider or the libp11 engine):
+
+- Debian/Ubuntu: `pcscd libccid opensc yubico-piv-tool pkcs11-provider
+  libengine-pkcs11-openssl`
+- Arch: `pcsclite ccid opensc yubico-piv-tool pkcs11-provider libp11`, then
+  `sudo systemctl enable --now pcscd.socket`
+
+The OpenSSL configs below use Debian's module paths. On Arch drop the
+`x86_64-linux-gnu/` part: `/usr/lib/ossl-modules/pkcs11.so`,
+`/usr/lib/engines-3/pkcs11.so` and `/usr/lib/opensc-pkcs11.so`.
 
 With the default USB ID nothing else is needed. libccid knows the ID and
 names the reader after the product it belongs to:
