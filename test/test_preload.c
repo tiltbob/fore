@@ -1,7 +1,8 @@
 /*
  * Preloaded factory key (make PRELOAD_KEY=...): built with the d = 4 header
  * from tools/gen-preload.py. The key and certificate appear on a blank device,
- * stay replaceable, survive reboots once replaced, and come back on reset.
+ * stay replaceable, survive reboots once replaced, and come back on reset, and
+ * so does the preloaded PIN (PRELOAD_PIN) if the header has one.
  *
  * Built with FORE_LOCKED (make PRELOAD_LOCKED=1) it checks the opposite: no
  * command replaces or removes them, and nothing left in storage is used.
@@ -50,6 +51,19 @@ static unsigned send(const uint8_t *apdu, size_t len)
 }
 
 #define SEND(...) send((const uint8_t[]){__VA_ARGS__}, sizeof((const uint8_t[]){__VA_ARGS__}))
+
+#ifdef PRELOAD_PIN
+static const uint8_t factory_pin[8] = PRELOAD_PIN;
+#else
+static const uint8_t factory_pin[8] = {'1', '2', '3', '4', '5', '6', 0xff, 0xff};
+#endif
+
+static unsigned verify_pin(const uint8_t pin[8])
+{
+    uint8_t cmd[13] = {0x00, 0x20, 0x00, 0x80, 0x08};
+    memcpy(cmd + 5, pin, 8);
+    return send(cmd, sizeof(cmd));
+}
 
 /* GET DATA for the 9A certificate, following 61xx. Returns the length. */
 static size_t get_cert(uint8_t *out)
@@ -119,8 +133,11 @@ static void check_factory_state(const char *when)
     CHECK(n == sizeof(preload_cert) && memcmp(cert, preload_cert, n) == 0, "%s: preloaded certificate", when);
     memset(digest, 0x44, sizeof(digest));
     CHECK(sign9a(digest) == 0x6982, "%s: 9A still needs the PIN", when);
-    CHECK(SEND(0x00, 0x20, 0x00, 0x80, 0x08, '1', '2', '3', '4', '5', '6', 0xff, 0xff) == 0x9000,
-          "%s: default PIN", when);
+#ifdef PRELOAD_PIN
+    static const uint8_t usual_pin[8] = {'1', '2', '3', '4', '5', '6', 0xff, 0xff};
+    CHECK(verify_pin(usual_pin) == 0x63c2, "%s: 123456 is not the PIN", when);
+#endif
+    CHECK(verify_pin(factory_pin) == 0x9000, "%s: factory PIN", when);
     CHECK(sign9a(digest) == 0x9000 && signed_by_4(digest), "%s: 9A signs with d = 4", when);
 }
 
@@ -196,7 +213,7 @@ int main(void)
     CHECK(SEND(0x00, 0xdb, 0x3f, 0xff, 0x07, 0x5c, 0x03, 0x5f, 0xc1, 0x05, 0x53, 0x00) == 0x9000, "delete cert");
     piv_init();
     CHECK(get_cert(cert) == 0, "deleted certificate stays deleted after reboot");
-    SEND(0x00, 0x20, 0x00, 0x80, 0x08, '1', '2', '3', '4', '5', '6', 0xff, 0xff);
+    verify_pin(factory_pin);
     CHECK(sign9a(digest) == 0x9000 && !signed_by_4(digest), "imported key replaced d = 4");
 #endif
 

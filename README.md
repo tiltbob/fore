@@ -40,6 +40,8 @@ Key slots and default PIN policies (override per key with
 
 Defaults, same as a YubiKey: PIN `123456`, PUK `12345678`, management key
 `010203040506070801020304050607080102030405060708` (3DES). Change all three.
+The novelty build's PIN is `8675309`, and preloaded builds can set their own
+(`PRELOAD_PIN`).
 
 ## Hardware
 
@@ -79,13 +81,15 @@ This build ships with the private key
 `0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004`
 (d = 4) in slot 9A. It also ships a self-signed certificate,
 "CN=fore insecure key (d = 0x4)", so OpenSC and OpenSSL see the key straight
-away. The device works like any other PIV token, PIN and all. Anyone can make
-the same signatures with a key file containing the number 4, and
-`build/novelty/preload-key.pem` is that file.
+away. The device works like any other PIV token, PIN and all, and the PIN is
+`8675309`. Anyone can make the same signatures with a key file containing the
+number 4, and `build/novelty/preload-key.pem` is that file.
 
-The key and certificate are the factory defaults. They are written on the first
-boot of a blank (mass-erased) chip and come back after `yubico-piv-tool -a
-reset`. Importing your own key or certificate replaces them as usual.
+The key, certificate and PIN are the factory defaults. They are written on the
+first boot of a blank (mass-erased) chip and come back after `yubico-piv-tool -a
+reset`. Importing your own key or certificate replaces them as usual, and the
+PIN can be changed as usual. Reflashing a dongle that already has data on it
+keeps what is there, so mass-erase it first to get the factory state.
 
 To ship your own certificate instead of the generated one, for example one
 issued by a CA or with a different subject, pass it in PEM or DER form:
@@ -114,8 +118,11 @@ make BUILD=build/mykey PRELOAD_KEY=key.pem PRELOAD_CERT=cert.pem
 - `PRELOAD_CERT` is optional. Without it you get a self-signed certificate,
   CN "fore preloaded key", or whatever you set with `PRELOAD_CN`.
 - `PRELOAD_SLOT` picks 9a (the default), 9c, 9d or 9e.
+- `PRELOAD_PIN` sets the factory PIN, 6 to 8 digits, instead of `123456`
+  (`make novelty` uses `8675309`). Like the key, it is restored by a PIV reset.
 
-`make novelty` takes `PRELOAD_SLOT`, `PRELOAD_CERT` and `PRELOAD_LOCKED` too.
+`make novelty` takes `PRELOAD_SLOT`, `PRELOAD_CERT`, `PRELOAD_PIN` and
+`PRELOAD_LOCKED` too.
 Editing either file rebuilds the image. `tools/gen-preload.py` builds the
 header and needs the `openssl` command-line tool.
 
@@ -133,8 +140,9 @@ make novelty PRELOAD_LOCKED=1            # d = 4, and it stays that way
   the storage pages, so there is nothing to overwrite or erase.
 - Key imports into any slot, and writing or deleting any certificate, fail with
   6A81 (function not supported).
-- A PIV reset (`yubico-piv-tool -a reset`) restores the default PIN, PUK and
-  management key and clears the other data objects; the key and certificate stay.
+- A PIV reset (`yubico-piv-tool -a reset`) restores the factory PIN
+  (`PRELOAD_PIN`, or `123456`), PUK and management key and clears the other data
+  objects; the key and certificate stay.
 - Keys or certificates that an earlier, unlocked build left in storage are
   ignored.
 - The PIN, PUK, management key, CHUID and CCC work as usual.
@@ -331,11 +339,11 @@ make -C test e2e       # pcscd + OpenSC + yubico-piv-tool + OpenSSL, twice
   of the STM32 USB peripheral (`test/usb_mock.c`): enumeration, descriptors,
   multi-packet control and bulk transfers, ZLPs, data toggles, halts, time
   extensions and bus resets.
-- `test_preload`: the novelty build's d = 4 key and certificate: present on a
-  blank device, replaceable, and restored by a reset. It runs three times:
-  with the generated certificate, with a CA-issued one supplied through
-  `--cert`, and as a locked build, where it checks that nothing can replace or
-  remove the key.
+- `test_preload`: the novelty build's d = 4 key, certificate and PIN 8675309:
+  present on a blank device, replaceable, and restored by a reset. It runs
+  three times: as the novelty build, with a CA-issued certificate supplied
+  through `--cert` and the default PIN, and as a locked build, where it checks
+  that nothing can replace or remove the key.
 
 `make -C test e2e` additionally needs `pcscd libccid vsmartcard-vpcd opensc
 yubico-piv-tool pkcs11-provider libengine-pkcs11-openssl libusb-1.0-0-dev`, and

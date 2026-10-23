@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate preload.h: a P-384 private key and its certificate, which become
-the firmware's factory defaults (make PRELOAD_KEY=... [PRELOAD_CERT=...]).
+the firmware's factory defaults (make PRELOAD_KEY=... [PRELOAD_CERT=...]),
+and optionally a factory PIN (PRELOAD_PIN=...).
 
 The key is a hex scalar or a P-384 private key file (PEM or DER, SEC1 or
 PKCS#8).
@@ -8,9 +9,9 @@ PKCS#8).
 The certificate is either one you supply (--cert, PEM or DER, any issuer, but
 its public key must match the private key) or a generated self-signed one.
 
-The key and certificate are installed on the first boot of a blank (mass-erased)
-chip and again after a PIV reset. The key ends up in the firmware image, so
-anyone with the .bin has it: this is for novelty builds only.
+The key, certificate and PIN are installed on the first boot of a blank
+(mass-erased) chip and again after a PIV reset. The key ends up in the firmware
+image, so anyone with the .bin has it: this is for novelty builds only.
 
 Also writes preload-key.pem and preload-cert.pem next to the header.
 Needs the openssl command-line tool.
@@ -154,9 +155,12 @@ def main():
     ap.add_argument("--slot", default="9a", choices=sorted(SLOTS))
     ap.add_argument("--cert", help="certificate to ship (PEM or DER) instead of a generated self-signed one")
     ap.add_argument("--cn", help="subject CN of the generated certificate")
+    ap.add_argument("--pin", help="factory PIN, 6 to 8 digits (default 123456)")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args()
 
+    if args.pin is not None and not (6 <= len(args.pin) <= 8 and args.pin.isascii() and args.pin.isdigit()):
+        sys.exit("--pin must be 6 to 8 digits")
     d = load_key(args.key)
     if not 1 <= d < N:
         sys.exit("--key must be a P-384 private scalar: 1 <= d < n")
@@ -202,7 +206,12 @@ def main():
         f.write("#define PRELOAD_CERT_TAG 0x%06xu\n" % tag)
         f.write(c_array("preload_key", scalar))
         f.write(c_array("preload_cert", container))
-    print("preload: slot %s, %s (%d byte certificate container)" % (args.slot, what, len(container)))
+        if args.pin:
+            # The PIN as VERIFY sends it: padded to 8 bytes with 0xFF.
+            padded = ["'%s'" % c for c in args.pin] + ["0xff"] * (8 - len(args.pin))
+            f.write("#define PRELOAD_PIN {%s}\n" % ", ".join(padded))
+    print("preload: slot %s, %s (%d byte certificate container)%s"
+          % (args.slot, what, len(container), ", PIN " + args.pin if args.pin else ""))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 #   ./e2e.sh vpcd   applet behind vsmartcard's virtual reader
 #   ./e2e.sh usb    full firmware USB path: the stock libccid talks to stm32/usb.c
 #                   through a fake libusb (test/fake_libusb.c) and the peripheral model
-#   ./e2e.sh novelty  vpcd with the factory-preloaded d = 4 key (make novelty)
+#   ./e2e.sh novelty  vpcd with the factory-preloaded d = 4 key and PIN 8675309 (make novelty)
 #   ./e2e.sh locked   the same, locked (make novelty PRELOAD_LOCKED=1)
 #
 # Starts its own pcscd, so no other pcscd may be running.
@@ -41,8 +41,10 @@ start_pcscd() {
 }
 
 CARD=$BUILD/vpcd_card
-[ "$MODE" = novelty ] && CARD=$BUILD/vpcd_card_novelty
-[ "$MODE" = locked ] && CARD=$BUILD/vpcd_card_locked
+PIN=123456
+case $MODE in
+novelty | locked) CARD=$BUILD/vpcd_card_$MODE PIN=8675309 ;; # make novelty's PIN
+esac
 
 case $MODE in
 vpcd | novelty | locked)
@@ -98,7 +100,7 @@ activate = 1
 [pkcs11_sect]
 module = /usr/lib/$MULTIARCH/ossl-modules/pkcs11.so
 pkcs11-module-path = $P11
-pkcs11-module-token-pin = 123456
+pkcs11-module-token-pin = $PIN
 activate = 1
 EOF
 
@@ -107,7 +109,8 @@ if [ "$MODE" = novelty ] || [ "$MODE" = locked ]; then
     step "factory key d = 4 in slot 9A"
     "${PIV[@]}" -a status | tee status.txt
     grep -q "CN=fore insecure key (d = 0x4)" status.txt || fail "preloaded certificate missing"
-    "${PIV[@]}" -P 123456 -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
+    if "${PIV[@]}" -P 123456 -a verify-pin; then fail "PIN 123456 accepted"; fi
+    "${PIV[@]}" -P "$PIN" -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
     echo "signed by a very secure token" >msg.txt
     OPENSSL_CONF=$WORK/provider.cnf openssl dgst -sha384 -sign "pkcs11:object=PIV AUTH key;type=private" \
         -out card.sig msg.txt
@@ -132,7 +135,7 @@ if [ "$MODE" = novelty ] || [ "$MODE" = locked ]; then
         for _ in 1 2 3; do "${PIV[@]}" -P 00000000 -N 123456 -a unblock-pin || true; done
         "${PIV[@]}" -a reset
         "${PIV[@]}" -a status | grep -q "CN=fore insecure key (d = 0x4)" || fail "reset removed the certificate"
-        "${PIV[@]}" -P 123456 -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
+        "${PIV[@]}" -P "$PIN" -a verify-pin -a test-signature -s 9a -i "$PRE/preload-cert.pem"
     fi
     echo
     echo "e2e ($MODE): all tests passed"

@@ -7,7 +7,8 @@
 #                             self-signed unless PRELOAD_CERT is given)
 #   make ... PRELOAD_LOCKED=1   locked: only the preloaded key exists, and it
 #                             cannot be replaced or deleted over the card interface
-#   make novelty              the above with d = 4, in build/novelty
+#   make ... PRELOAD_PIN=<6-8 digits>   factory PIN instead of 123456
+#   make novelty              the above with d = 4 and PIN 8675309, in build/novelty
 #   make flash                program over SWD with st-flash
 #   make test                 run the host test suites
 
@@ -24,6 +25,7 @@ PRELOAD_SLOT ?= 9a
 PRELOAD_CERT ?=
 PRELOAD_CN ?=
 PRELOAD_LOCKED ?= 0
+PRELOAD_PIN ?=
 
 SRCS := stm32/startup.c stm32/main.c stm32/usb.c \
         src/ccid.c src/piv.c src/store.c src/p384.c src/sha512.c src/des.c
@@ -64,6 +66,11 @@ ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)
 $(error PRELOAD_CERT needs PRELOAD_KEY, the private key it belongs to)
 endif
 endif
+ifneq ($(PRELOAD_PIN),)
+ifeq ($(PRELOAD_KEY)$(filter novelty,$(MAKECMDGOALS)),)
+$(error PRELOAD_PIN needs PRELOAD_KEY (or make novelty))
+endif
+endif
 ifneq ($(filter-out 0 1,$(PRELOAD_LOCKED)),)
 $(error PRELOAD_LOCKED must be 0 or 1)
 endif
@@ -84,18 +91,18 @@ $(BUILD)/fw/src/store.o $(BUILD)/fw/src/piv.o: $(BUILD)/preload.h
 $(BUILD)/preload.h: tools/gen-preload.py $(BUILD)/preload.id $(wildcard $(PRELOAD_KEY)) $(PRELOAD_CERT)
 	python3 tools/gen-preload.py --key $(PRELOAD_KEY) --slot $(PRELOAD_SLOT) \
 		$(if $(PRELOAD_CERT),--cert $(PRELOAD_CERT)) $(if $(PRELOAD_CN),--cn '$(PRELOAD_CN)') \
-		--out-dir $(BUILD)
+		$(if $(PRELOAD_PIN),--pin '$(PRELOAD_PIN)') --out-dir $(BUILD)
 # Regenerate (and recompile its users) when any preload setting changes.
-PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT) $(PRELOAD_CN) $(PRELOAD_LOCKED)
+PRELOAD_ID := $(PRELOAD_KEY) $(PRELOAD_SLOT) $(PRELOAD_CERT) $(PRELOAD_CN) $(PRELOAD_LOCKED) $(PRELOAD_PIN)
 $(BUILD)/preload.id: FORCE
 	@mkdir -p $(BUILD)
 	@echo '$(PRELOAD_ID)' | cmp -s - $@ || echo '$(PRELOAD_ID)' > $@
 endif
 
-# A deliberately insecure novelty build: the private key is 4.
+# A deliberately insecure novelty build: the private key is 4, the PIN 8675309.
 novelty:
 	$(MAKE) BUILD=$(BUILD)/novelty PRELOAD_KEY=4 PRELOAD_SLOT=$(PRELOAD_SLOT) \
-		'PRELOAD_CN=fore insecure key (d = 0x4)'
+		PRELOAD_PIN=$(or $(PRELOAD_PIN),8675309) 'PRELOAD_CN=fore insecure key (d = 0x4)'
 
 flash: $(BUILD)/fore.bin
 	st-flash --reset write $< 0x08000000
